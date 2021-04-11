@@ -39,54 +39,12 @@ class gelu(nn.Module):
     #gelu(x) = 0.5*x*(1+tanh(sqrt(2/pi)*(x+0.0044715x**3))
     def forward(self,x):
         return 0.5*x*(1+torch.tanh(math.sqrt(2/math.pi)*(x+0.0044715*(x**3))))
-
 # Multihead attention
 # 1. Encoder 부 - self attention
-class multi_head_self_attention(nn.Module):
-    def __init__(self,args):
-        super().__init__()
-        self.args = args
-        self.d_k = self.args.d_model // self.args.n_head
-        self.linear_Q = nn.Linear(args.d_model,args.d_model)
-        self.linear_K = nn.Linear(args.d_model,args.d_model)
-        self.linear_V = nn.Linear(args.d_model,args.d_model)
-        
-    def forward(self, input, mask = None):
-        # input (bs, seq_len, d_model) -> (bs,seq_len,h,d_k)
-        # 여기서 mask는 padding mask 용 - (bs, seq_len) -> (bs,seq_len,seq_len)
-        Q = self.linear_Q(input)
-        Q = Q.reshape(-1,self.args.seq_len,self.args.n_head,self.d_k).transpose(1,2).contiguous() # bs,h,seq_len,d_k
-        K = self.linear_K(input) 
-        K = K.reshape(-1,self.args.seq_len,self.args.n_head,self.d_k).transpose(1,2).contiguous()
-        V = self.linear_V(input) 
-        V = V.reshape(-1,self.args.seq_len,self.args.n_head,self.d_k).transpose(1,2).contiguous()
-        
-        next = torch.matmul(Q,K.transpose(2,3).contiguous())/math.sqrt(self.d_k)
-        if mask is not None:
-            mask = mask.unsqueeze(1).unsqueeze(-1).expand(next.size())
-            next = next.masked_fill(mask,-1e-8)
-        softmax = nn.Softmax(3).forward(next)
-        output = torch.matmul(softmax,V) # bs, h, seq_len, d_k
-        output = output.transpose(1,2).contiguous()
-        output = output.reshape(-1,self.args.seq_len,self.args.d_model) # bs, seq_len, d_model
-        return output
- 
-class feed_forward_network(nn.Module):
-    def __init__(self,args):
-        super().__init__()
-        
-        self.f1 = nn.Linear(args.d_model,args.d_ff)
-        self.f2 = nn.Linear(args.d_ff,args.d_model)
-        self.dropout = nn.Dropout(args.dropout)
-        self.gelu = gelu()
-    def forward(self,input):
-        output = self.f1(input)
-        output = self.dropout(self.gelu(output))
-        output = self.f2(output)
-        return output
-
 # 2. Decoder 부 - masked self attention
-class masked_multi_head_self_attention(nn.Module):
+# 3. Encoder - Decoder attention
+# Mask만 subsequent mask + padding mask하면 됨
+class multi_head_attention(nn.Module):
     def __init__(self,args):
         super().__init__()
         self.args = args
@@ -95,30 +53,33 @@ class masked_multi_head_self_attention(nn.Module):
         self.linear_K = nn.Linear(args.d_model,args.d_model)
         self.linear_V = nn.Linear(args.d_model,args.d_model)
         
-    def forward(self, input, mask = None):
+    def forward(self, query, key, value, mask = None):
         # input (bs, seq_len, d_model) -> (bs,seq_len,h,d_k)
-        # 여기서 mask는 padding mask 용 - (bs, seq_len) -> (bs,seq_len,seq_len)
-        Q = self.linear_Q(input)
+        # 여기서 mask는 padding mask 용 - (bs, seq_len)
+        Q = self.linear_Q(query)
         Q = Q.reshape(-1,self.args.seq_len,self.args.n_head,self.d_k).transpose(1,2).contiguous() # bs,h,seq_len,d_k
-        K = self.linear_K(input) 
+        K = self.linear_K(key) 
         K = K.reshape(-1,self.args.seq_len,self.args.n_head,self.d_k).transpose(1,2).contiguous()
-        V = self.linear_V(input) 
+        V = self.linear_V(value) 
         V = V.reshape(-1,self.args.seq_len,self.args.n_head,self.d_k).transpose(1,2).contiguous()
         
         next = torch.matmul(Q,K.transpose(2,3).contiguous())/math.sqrt(self.d_k)
         # padding mask
         if mask is not None:
-            mask = mask.unsqueeze(1).unsqueeze(-1).expand(next.size())
+            mask = mask.unsqueeze(1).unsqueeze(-1).expand(next.size()) # bs, h, seq_len, d_k
             next = next.masked_fill(mask,-1e-8)
-        # subsequent mask
-        subsequent_mask = torch.triu(torch.ones(self.args.seq_len,self.args.seq_len),1)
-        next = next.masked_fill(subsequent_mask,-1e-8)
         softmax = nn.Softmax(3).forward(next)
         output = torch.matmul(softmax,V) # bs, h, seq_len, d_k
         output = output.transpose(1,2).contiguous()
         output = output.reshape(-1,self.args.seq_len,self.args.d_model) # bs, seq_len, d_model
         return output
- 
+    
+class multi_head_self_attention(multi_head_attention):
+    def __init__(self,args):
+        super().__init__()
+    def forward(self, input, mask=None):
+        return super().forward(input,input,input,mask)
+
 class feed_forward_network(nn.Module):
     def __init__(self,args):
         super().__init__()
@@ -132,8 +93,6 @@ class feed_forward_network(nn.Module):
         output = self.dropout(self.gelu(output))
         output = self.f2(output)
         return output
-
-
 
 # 각 layer에서 sample의 평균과 std를 구함(feature 무관)
 # 그를 이용해서 각 sample를 정규화 시킴
@@ -179,7 +138,7 @@ class Transformer_Encoder_Layer(nn.Module):
     def __init__(self,args):
         super().__init__()
         self.layer_connection1 = layer_connection(args)
-        self.mha = multi_head_self_attention(args)
+        self.mha = multi_head_attention(args)
         self.layer_connection2 = layer_connection(args)
         self.ffn = feed_forward_network(args)
     def forward(self,input,mask = None):
