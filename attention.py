@@ -44,6 +44,7 @@ class gelu(nn.Module):
 # 2. Decoder 부 - masked self attention
 # 3. Encoder - Decoder attention
 # Mask만 subsequent mask + padding mask하면 됨
+
 class multi_head_attention(nn.Module):
     def __init__(self,args):
         super().__init__()
@@ -55,7 +56,7 @@ class multi_head_attention(nn.Module):
         
     def forward(self, query, key, value, mask = None):
         # input (bs, seq_len, d_model) -> (bs,seq_len,h,d_k)
-        # 여기서 mask는 padding mask 용 - (bs, seq_len)
+        # 여기서 mask - (bs, seq_len(q), seq_len(k))
         Q = self.linear_Q(query)
         Q = Q.reshape(-1,self.args.seq_len,self.args.n_head,self.d_k).transpose(1,2).contiguous() # bs,h,seq_len,d_k
         K = self.linear_K(key) 
@@ -66,7 +67,7 @@ class multi_head_attention(nn.Module):
         next = torch.matmul(Q,K.transpose(2,3).contiguous())/math.sqrt(self.d_k)
         # padding mask
         if mask is not None:
-            mask = mask.unsqueeze(1).unsqueeze(-1).expand(next.size()) # bs, h, seq_len, d_k
+            mask = mask.unsqueeze(1).expand(next.size()) # bs, h, seq_len(q), seq_len(k)
             next = next.masked_fill(mask,-1e-8)
         softmax = nn.Softmax(3).forward(next)
         output = torch.matmul(softmax,V) # bs, h, seq_len, d_k
@@ -76,7 +77,7 @@ class multi_head_attention(nn.Module):
     
 class multi_head_self_attention(multi_head_attention):
     def __init__(self,args):
-        super().__init__()
+        super().__init__(args)
     def forward(self, input, mask=None):
         return super().forward(input,input,input,mask)
 
@@ -116,96 +117,99 @@ class layer_norm(nn.Module):
             #print(self.beta.shape)
         return output
     
-    
 class layer_connection(nn.Module):
     # input + dropout(layernorm(sublayer(input)))
     def __init__(self,args):
         super().__init__()
         self.layer_norm = layer_norm(args)
         self.dropout=nn.Dropout(args.dropout)
-    def forward(self,sublayer,input,mask = None):
+    def forward(self, sublayer, input):
         # input (bs, seq_len, d_model)
         # layer norm + dropout + residual net
         # attention is all you need 에선 , LayerNormalization(sublayer(input)+input)
         #print(sublayer(input).shape)
-        if mask is None:
-            output = input + self.dropout(self.layer_norm(sublayer(input)))
-        else:
-            output = input + self.dropout(self.layer_norm(sublayer(input,mask)))
+        output = input + self.dropout(self.layer_norm(sublayer(input)))
         return output
  
 class Transformer_Encoder_Layer(nn.Module):
     def __init__(self,args):
         super().__init__()
         self.layer_connection1 = layer_connection(args)
-        self.mha = multi_head_attention(args)
+        self.mha = multi_head_self_attention(args)
         self.layer_connection2 = layer_connection(args)
         self.ffn = feed_forward_network(args)
-    def forward(self,input,mask = None):
+    def forward(self, input, mask = None):
         # multi head attention
         # feed forward network
-        output1 = self.layer_connection1(self.mha, input, mask)
+        output1 = self.layer_connection1(lambda x : self.mha(x,mask = mask), input) # 기가 막힌 technique
         output2 = self.layer_connection2(self.ffn, output1)
         return output2
- 
-class BERT(nn.Module):
+    
+class Transformer_Encoder(nn.Module):
     def __init__(self,args):
-        
         super().__init__()
         self.args = args
-        self.TE = token_embedding(args)
-        self.SE = segment_embedding(args)
-        self.PE = positional_enbedding(args)
+        self.token_embedding = token_embedding(args)
+        self.positional_embedding = positional_embedding(args)
         self.encoder = nn.ModuleList([Transformer_Encoder_Layer(args) for _ in range(args.n_layers)])
-        
-    def forward(self, input_ids, segment_ids):
-        # input ids (bs, seq_len) <- tokens
-        # segment_ids (bs,seq_len) <- segments
-        # masks (bs, seq_len) <- mask된 부분
-        
-        
-        # embedding
-        te = self.TE(input_ids)
-        se = self.SE(segment_ids)
-        e = te+se
-        output = self.PE(e)
-        # masks
-        masks = input_ids.eq(self.args.padding_idx)
-        # output
+    def forward(self, input):
+        # padding mask
+        mask = input.eq(args.padding_idx).unsqueeze(1).expand(input.size(0),input.size(1),input.size(1)) # bs, seq_len1, seq_len1
+        output = self.token_embedding(input)
+        output = self.positional_embedding(output) # bs, seqlen, d_model
         for i in range(self.args.n_layers):
-            output = self.encoder[i](output,masks)
-        return output # (bs,seq_len,d_model)
-    
-class MLM(nn.Module): # MASK 위치에 해당하는 벡터가 들어오면 예측
-    def __init__(self,args):
-        super().__init__()
-        
-        self.linear = nn.Linear(args.d_model,args.n_vocab)
-    def forward(self,input):
-        # input : (bs, seq_len, d_model)
-        output = self.linear(input)
+            output = self.encoder[i](output,mask)
         return output
-        
-class BERT_NSP(nn.Module):
-    # CLS로 판단
-    def __init__(self,args):
-        super().__init__()
     
-        self.linear = nn.Linear(args.d_model,2)
-    def forward(self,input):
-        # input : (bs, seq_len, d_model)
-        output = self.linear(input[:,0]) # CLS token
-        return output
- 
-class BERT_pretrain(nn.Module):
+class Transformer_Decoder_Layer(nn.Module):
     def __init__(self,args):
         super().__init__()
-        #self.tokenizer = BertTokenizer.from_pretrained(args.tokenizer_file,strip_accents=False,lowercase=False)
-        self.bert = BERT(args)
-        self.mlm = MLM(args)
-        self.nsp = BERT_NSP(args)
-    def forward(self,input_ids,segment_ids):
-        output = self.bert(input_ids,segment_ids)
-        mlm_output=self.mlm(output)
-        nsp_output=self.nsp(output)
-        return mlm_output,nsp_output
+        self.layer_connection1 = layer_connection(args)
+        # decoder masked multi head self attention
+        self.decoder_mha = multi_head_self_attention(args)
+        self.layer_connection2 = layer_connection(args)
+        # encoder - decoder multi head attention
+        self.encoder_decoder_attn = multi_head_attention(args)
+        # feed forward network
+        self.ffn = feed_forward_network(args)
+
+        self.layer_connection3 = layer_connection(args)
+    def forward(self, decoder_input, encoder_output, decoder_mask = None, encoder_mask = None):
+        output1 = self.layer_connection1(lambda x : self.decoder_mha(x,mask = decoder_mask), decoder_input)
+        output2 = self.layer_connection2(lambda x : self.encoder_decoder_attn(query = x, key = encoder_output, value = encoder_output, mask = encoder_mask), decoder_input)
+        output3 = self.layer_connection2(self.ffn, output2)
+        return output3
+
+class Transformer_Decoder(nn.Module):
+    def __init__(self,args):
+        super().__init__()
+        self.args = args
+        self.token_embedding = token_embedding(self.args) 
+        self.positional_embedding = positional_embedding(self.args)
+        self.decoder = nn.ModuleList([Transformer_Decoder_Layer(args) for _ in range(self.args.n_layers)])
+    def forward(self, decoder_input, encoder_output, encoder_mask = None):
+        # decoder input (bs, seq_len2)
+        # encoder output (bs, seq_len1, d_model)
+        # encoder mask (bs, seq_len1)
+        # padding mask + subsquent mask
+        padding_mask = decoder_input.eq(args.padding_idx).unsqueeze(1).expand(decoder_input.size(0),decoder_input.size(1),decoder_input.size(1)) # bs, seq_len2, seq_len2
+        subsequent_mask = torch.triu(torch.ones(decoder_input.size(1),decoder_input.size(1),device = decoder_input.device),1).unsqueeze(0).bool() # 1,seq_len2,seq_len2
+        mask = padding_mask + subsequent_mask
+        
+        output = self.token_embedding(decoder_input)
+        output = self.positional_embedding(output) # bs, seqlen, d_model
+        for i in range(self.args.n_layers):
+            output = self.decoder[i](output,encoder_output,decoder_mask = mask, encoder_mask = encoder_mask)
+        return output
+    
+class Transformer(nn.Module):
+    def __init__(self,args):
+        super().__init__()
+        self.args = args
+        self.encoder = Transformer_Encoder(args)
+        self.decoder = Transformer_Decoder(args)
+    def forward(self,encoder_input,decoder_input):
+        encoder_output = self.encoder.forward(encoder_input)
+        encoder_mask = encoder_input.eq(args.padding_idx).unsqueeze(1).expand(encoder_input.size(0),encoder_input.size(1),encoder_input.size(1)) # bs, seq_len1, seq_len1
+        decoder_output = self.decoder.forward(decoder_input,encoder_output,encoder_mask)
+        return decoder_output
