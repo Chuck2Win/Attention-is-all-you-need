@@ -68,7 +68,7 @@ class multi_head_attention(nn.Module):
         # padding mask
         if mask is not None:
             mask = mask.unsqueeze(1).expand(next.size()) # bs, h, seq_len(q), seq_len(k)
-            next = next.masked_fill(mask,-1e-8)
+            next = next.masked_fill(mask,-1e8)
         softmax = nn.Softmax(3).forward(next)
         output = torch.matmul(softmax,V) # bs, h, seq_len, d_k
         output = output.transpose(1,2).contiguous()
