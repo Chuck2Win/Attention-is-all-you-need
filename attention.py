@@ -4,6 +4,8 @@ import torch.nn as nn
 import math
 ### embeddings ###
 
+### embeddings ###
+
 class positional_embedding(nn.Module):
     def __init__(self,args):
         super().__init__()
@@ -192,7 +194,7 @@ class Transformer_Decoder(nn.Module):
         # encoder output (bs, seq_len1, d_model)
         # encoder mask (bs, seq_len1)
         # padding mask + subsquent mask
-        padding_mask = decoder_input.eq(args.padding_idx).unsqueeze(1).expand(decoder_input.size(0),decoder_input.size(1),decoder_input.size(1)) # bs, seq_len2, seq_len2
+        padding_mask = decoder_input.eq(self.args.padding_idx).unsqueeze(1).expand(decoder_input.size(0),decoder_input.size(1),decoder_input.size(1)) # bs, seq_len2, seq_len2
         subsequent_mask = torch.triu(torch.ones(decoder_input.size(1),decoder_input.size(1),device = decoder_input.device),1).unsqueeze(0).bool() # 1,seq_len2,seq_len2
         mask = padding_mask + subsequent_mask
         
@@ -210,6 +212,6 @@ class Transformer(nn.Module):
         self.decoder = Transformer_Decoder(args)
     def forward(self,encoder_input,decoder_input):
         encoder_output = self.encoder.forward(encoder_input)
-        encoder_mask = encoder_input.eq(args.padding_idx).unsqueeze(1).expand(encoder_input.size(0),encoder_input.size(1),encoder_input.size(1)) # bs, seq_len1, seq_len1
+        encoder_mask = encoder_input.eq(self.args.padding_idx).unsqueeze(1).expand(encoder_input.size(0),encoder_input.size(1),encoder_input.size(1)) # bs, seq_len1, seq_len1
         decoder_output = self.decoder.forward(decoder_input,encoder_output,encoder_mask)
         return decoder_output
