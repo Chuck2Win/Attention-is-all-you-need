@@ -210,8 +210,11 @@ class Transformer(nn.Module):
         self.args = args
         self.encoder = Transformer_Encoder(args)
         self.decoder = Transformer_Decoder(args)
+        self.linear = nn.Linear(args.d_model, args.n_vocab)
     def forward(self,encoder_input,decoder_input):
         encoder_output = self.encoder.forward(encoder_input)
         encoder_mask = encoder_input.eq(self.args.padding_idx).unsqueeze(1).expand(encoder_input.size(0),encoder_input.size(1),encoder_input.size(1)) # bs, seq_len1, seq_len1
         decoder_output = self.decoder.forward(decoder_input,encoder_output,encoder_mask)
-        return decoder_output
+        output = self.linear.forward(decoder_output)
+        return output
+
