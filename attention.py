@@ -13,7 +13,7 @@ class positional_embedding(nn.Module):
         div = (10000**(torch.arange(0,args.d_model,device = args.device)/args.d_model)).unsqueeze(0) # 1, d_model
         self.pe = pos/div
         self.pe[:,0::2] = torch.sin(self.pe[:,0::2])
-        self.pe[:,1::2] = torch.cos(self.pe[:,1::2])
+        self.pe[:,1::2] = torch.cos(self.pe[:,0::2])
         self.pe = self.pe.to(args.device) 
         self.dropout = nn.Dropout(args.dropout)
         
