@@ -11,9 +11,9 @@ class positional_embedding(nn.Module):
         super().__init__()
         pos = torch.arange(0,args.max_len,device = args.device).unsqueeze(1) # max_len, 1
         div = (10000**(torch.arange(0,args.d_model,device = args.device)/args.d_model)).unsqueeze(0) # 1, d_model
-        self.pe = pos/div
-        self.pe[:,0::2] = torch.sin(self.pe[:,0::2])
-        self.pe[:,1::2] = torch.cos(self.pe[:,0::2])
+        self.pe = torch.zeros_like(pos/div)
+        self.pe[:,0::2] = torch.sin(pos/div[:,0::2])
+        self.pe[:,1::2] = torch.cos(pos/div[:,0::2])
         self.pe = self.pe.to(args.device) 
         self.dropout = nn.Dropout(args.dropout)
         
